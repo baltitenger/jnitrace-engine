@@ -137,29 +137,42 @@ export function run (callbackManager: JNICallbackManager): void {
     }
     
     const dlopenRef = Module.findExportByName(null, "dlopen");
+    const dlopenExtRef = Module.findExportByName(null, "android_dlopen_ext");
     const dlsymRef = Module.findExportByName(null, "dlsym");
     const dlcloseRef = Module.findExportByName(null, "dlclose");
+
+    const dlopenCallback = (filename: NativePointer, retval: NativeReturnValue) => {
+        const path = filename.readCString();
+        if (path !== null) {
+            if (checkLibrary(path)) {
+                // eslint-disable-next-line @typescript-eslint/no-base-to-string
+                trackedLibs.set(retval.toString(), true);
+            } else {
+                // eslint-disable-next-line @typescript-eslint/no-base-to-string
+                libBlacklist.set(retval.toString(), true);
+            }
+        }
+        return retval;
+    }
     
-    if (dlopenRef !== null && dlsymRef !== null && dlcloseRef !== null) {
+    if ((dlopenRef !== null || dlopenExtRef !== null) && dlsymRef !== null && dlcloseRef !== null) {
         const HANDLE_INDEX = 0;
     
-        const dlopen = new NativeFunction(dlopenRef, "pointer", ["pointer", "int"]);
-        Interceptor.replace(dlopen, new NativeCallback((filename: NativePointer, mode: number): NativeReturnValue => {
-            const path = filename.readCString();
-            const retval = dlopen(filename, mode);
-    
-            if (path !== null) {
-                if (checkLibrary(path)) {
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-                    trackedLibs.set(retval.toString(), true);
-                } else {
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-                    libBlacklist.set(retval.toString(), true);
-                }
-            }
+        if (dlopenRef !== null) {
+            const dlopen = new NativeFunction(dlopenRef, "pointer", ["pointer", "int"]);
+            Interceptor.replace(dlopen, new NativeCallback(
+                (filename: NativePointer, mode: number): NativeReturnValue =>
+                dlopenCallback(filename, dlopen(filename, mode)),
+                "pointer", ["pointer", "int"]));
+        }
 
-            return retval;
-        }, "pointer", ["pointer", "int"]));
+        if (dlopenExtRef !== null) {
+            const dlopenExt = new NativeFunction(dlopenExtRef, "pointer", ["pointer", "int", "pointer"]);
+            Interceptor.replace(dlopenExt, new NativeCallback(
+                (filename: NativePointer, mode: number, info: NativePointer): NativeReturnValue =>
+                dlopenCallback(filename, dlopenExt(filename, mode, info)),
+                "pointer", ["pointer", "int", "pointer"]));
+        }
     
         const dlsym = new NativeFunction(dlsymRef, "pointer", ["pointer", "pointer"]);
         Interceptor.attach(dlsym, {
